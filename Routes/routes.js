@@ -57,11 +57,36 @@ router.post(
 // GET: Get All Users
 router.get("/users", (req, res) => {
   const query = `SELECT id, name, email, username, profilePhoto, phone FROM users`;
-  db.query(query, (err, result) => {
-    if (err) return res.status(500).json({ message: "Error fetching users", error: err });
-    res.status(200).json(result);
+  db.query(query, (err, results) => {
+    if (err) {
+      return res.status(500).json({
+        message: "Error fetching users",
+        error: err,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Base URL untuk gambar profil
+    const baseUrl = `${req.protocol}://${req.get("host")}/uploads`;
+    const users = results.map(user => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+      profilePhotoUrl: user.profilePhoto
+        ? `${baseUrl}/${user.profilePhoto.replace(/\s+/g, "_")}` // Ganti spasi di respons
+        : null,
+      phone: user.phone,
+    }));
+
+    res.status(200).json({
+      message: "Users fetched successfully",
+      timestamp: new Date().toISOString(),
+      users,
+    });
   });
 });
+
 
 // GET: Get User by ID
 router.get("/user/:id", (req, res) => {
@@ -75,83 +100,97 @@ router.get("/user/:id", (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.status(200).json(result[0]);
+    // Base URL untuk gambar profil
+    const baseUrl = `${req.protocol}://${req.get("host")}/uploads`;
+    const user = result[0];
+    user.profilePhotoUrl = user.profilePhoto
+      ? `${baseUrl}/${user.profilePhoto.replace(/\s+/g, "_")}`  // Ganti spasi dengan "_"
+      : null; // Fallback jika profilePhoto null
+
+    res.status(200).json(user);
   });
 });
 
-
-// GET: Get User Profile Photo Links
-router.get("/users/profile-photos", (req, res) => {
-  const query = `SELECT id, username, profilePhoto FROM users WHERE profilePhoto IS NOT NULL`;
-  db.query(query, (err, results) => {
-    if (err) {
-      return res.status(500).json({ message: "Error fetching user profile photos", error: err });
+//PUT User By Id
+  router.put(
+    "/user/:id",
+    upload.single("profilePhoto"), 
+    [
+      body("phone").optional().isMobilePhone().withMessage("Valid phone number is required"), 
+    ],
+    async (req, res) => {
+      const { id } = req.params;
+      const { phone, password } = req.body;
+      const photo = req.file ? req.file.path : null;
+  
+      // Ambil data user dari database untuk validasi
+      db.query("SELECT username, email, password, phone, profilePhoto FROM users WHERE id = ?", [id], (err, result) => {
+        if (err) {
+          return res.status(500).json({ message: "Error fetching user data", error: err });
+        }
+        if (result.length === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+  
+        const currentUser = result[0];
+  
+        // Validasi bahwa username dan email tidak berubah
+        if (req.body.username && req.body.username !== currentUser.username) {
+          return res.status(400).json({ message: "Username cannot be changed" });
+        }
+  
+        if (req.body.email && req.body.email !== currentUser.email) {
+          return res.status(400).json({ message: "Email cannot be changed" });
+        }
+  
+        const updateFields = [];
+        const updateValues = [];
+  
+        // Validasi perubahan password
+        if (password) {
+          // Hash password baru jika diubah
+          // Gunakan bcrypt atau metode lainnya untuk hash password sebelum update
+          const hashedPassword = bcrypt.hashSync(password, 10);  // Misalnya menggunakan bcrypt untuk hashing
+          updateFields.push("password = ?");
+          updateValues.push(hashedPassword);
+        }
+  
+        // Validasi phone
+        if (phone && phone !== currentUser.phone) {
+          updateFields.push("phone = ?");
+          updateValues.push(phone);
+        }
+  
+        // Validasi profile photo
+        if (photo && photo !== currentUser.profilePhoto) {
+          updateFields.push("profilePhoto = ?");
+          updateValues.push(photo);  
+        }
+  
+        // Jika tidak ada perubahan
+        if (updateFields.length === 0) {
+          return res.status(400).json({ message: "No changes detected" });
+        }
+  
+        updateValues.push(id);
+  
+        // Update data user di database
+        const query = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
+  
+        db.query(query, updateValues, (err, result) => {
+          if (err) {
+            return res.status(500).json({ message: "Error updating user", error: err });
+          }
+          if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "User not found" });
+          }
+          res.status(200).json({ message: "User updated successfully" });
+        });
+      });
     }
+  );
+  
 
-    const profilePhotoLinks = results.map((user) => {
-      let profilePhotoUrl = user.profilePhoto;
-
-      // Gantilah path ini dengan URL HTTPS yang sesuai jika gambar berada di server lain
-      if (profilePhotoUrl) {
-        profilePhotoUrl = `https://console.cloud.google.com/storage/browser/api-fitur/${profilePhotoUrl.replace(/\\/g, '/')}`;
-      }
-
-      return {
-        id: user.id,
-        username: user.username,
-        profilePhotoUrl: profilePhotoUrl,
-      };
-    });
-
-    res.status(200).json({ profilePhotos: profilePhotoLinks });
-  });
-});
-
-
-// PUT: Edit User (Allowing phone and photo to be updated)
-router.put(
-  "/user/:id",
-  upload.single("profilePhoto"), 
-  [
-    body("phone").optional().isMobilePhone().withMessage("Valid phone number is required"), 
-  ],
-  async (req, res) => {
-    const { id } = req.params;
-    const { phone } = req.body;
-    const photo = req.file ? req.file.path : null;
-
-    const updateFields = [];
-    const updateValues = [];
-
-    if (phone) {
-      updateFields.push("phone = ?");
-      updateValues.push(phone);
-    }
-
-    if (photo) {
-      updateFields.push("profilePhoto = ?");
-      updateValues.push(photo);  
-    }
-
-    if (updateFields.length === 0) {
-      return res.status(400).json({ message: "No fields to update" });
-    }
-
-    updateValues.push(id);
-
-    const query = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
-
-    db.query(query, updateValues, (err, result) => {
-      if (err) {
-        return res.status(500).json({ message: "Error updating user", error: err });
-      }
-      if (result.affectedRows === 0) {
-        return res.status(404).json({ message: "User not found" });
-      }
-      res.status(200).json({ message: "User updated successfully" });
-    });
-  }
-);
 
 // DELETE: Delete User and Associated Posts
 router.delete("/user/:id", (req, res) => {
@@ -253,139 +292,10 @@ router.post("/forum", upload.single("image"), async (req, res) => {
 
         const forumId = forumResult.insertId;
 
-        // Insert notification for forum post creation with delay
-        const notificationMessage = `${username} telah membuat posting baru: "${title}"`;
-        const insertNotificationQuery = `INSERT INTO notifications (title, message, user_id, profilePhoto, action_type, created_at) VALUES (?, ?, ?, ?, 'post', ?)`;
-
-        setTimeout(() => {
-          db.query(insertNotificationQuery, [title, notificationMessage, user_id, userProfilePhoto, currentTime], (err, notifResult) => {
-            if (err) {
-              return res.status(500).json({ message: "Error creating notification", error: err });
-            }
-
-            res.status(201).json({
-              message: "Post and notification created successfully",
-              postId: forumId,
-              notificationId: notifResult.insertId,
-            });
-          });
-        }, 10000); // 10 detik delay untuk notifikasi
-      });
-    });
-  } catch (error) {
-    console.error("Unexpected Error:", error);
-    res.status(500).json({ message: "Unexpected error occurred", error: error.message || "Unknown error" });
-  }
-});
-
-
-// POST: Create Comment
-router.post("/comment", async (req, res) => {
-  try {
-    const { comment, post_id, username } = req.body;
-    const currentTime = new Date();
-
-    // Cari user_id dan profilePhoto berdasarkan username
-    const getUserIdQuery = `SELECT id, profilePhoto FROM users WHERE username = ?`;
-    db.query(getUserIdQuery, [username], (err, userResult) => {
-      if (err) {
-        return res.status(500).json({ message: "Error fetching user_id", error: err });
-      }
-
-      if (userResult.length === 0) {
-        return res.status(404).json({ message: "Username not found" });
-      }
-
-      const user_id = userResult[0].id;
-      const userProfilePhoto = userResult[0].profilePhoto;
-
-      // Insert comment
-      const insertCommentQuery = `INSERT INTO comments (post_id, comment, user_id, created_at) VALUES (?, ?, ?, ?)`;
-      db.query(insertCommentQuery, [post_id, comment, user_id, currentTime], (err, commentResult) => {
-        if (err) {
-          return res.status(500).json({ message: "Error creating comment", error: err });
-        }
-
-        // Insert notification for comment with delay
-        const insertNotificationQuery = `INSERT INTO notifications (title, message, user_id, profilePhoto, action_type, created_at) VALUES (?, ?, ?, ?, 'comment', ?)`;
-        const notificationMessage = `${username} telah memberi komentar pada postingan Anda: "${comment}"`;
-
-        setTimeout(() => {
-          db.query(insertNotificationQuery, [comment, notificationMessage, user_id, userProfilePhoto, currentTime], (err, notifResult) => {
-            if (err) {
-              return res.status(500).json({ message: "Error creating notification", error: err });
-            }
-
-            res.status(201).json({
-              message: "Comment and notification created successfully",
-              commentId: commentResult.insertId,
-              notificationId: notifResult.insertId,
-            });
-          });
-        }, 10000); // 10 detik delay untuk notifikasi
-      });
-    });
-  } catch (error) {
-    console.error("Unexpected Error:", error);
-    res.status(500).json({ message: "Unexpected error occurred", error: error.message || "Unknown error" });
-  }
-});
-
-// POST: Create Like
-router.post("/like", async (req, res) => {
-  try {
-    const { post_id, username } = req.body;
-    const currentTime = new Date();
-
-    // Cari user_id dan profilePhoto berdasarkan username
-    const getUserIdQuery = `SELECT id, profilePhoto FROM users WHERE username = ?`;
-    db.query(getUserIdQuery, [username], (err, userResult) => {
-      if (err) {
-        return res.status(500).json({ message: "Error fetching user_id", error: err });
-      }
-
-      if (userResult.length === 0) {
-        return res.status(404).json({ message: "Username not found" });
-      }
-
-      const user_id = userResult[0].id;
-      const userProfilePhoto = userResult[0].profilePhoto;
-
-      // Check if the user has already liked the post
-      const checkLikeQuery = `SELECT * FROM likes WHERE post_id = ? AND user_id = ?`;
-      db.query(checkLikeQuery, [post_id, user_id], (err, likeResult) => {
-        if (err) {
-          return res.status(500).json({ message: "Error checking like", error: err });
-        }
-
-        if (likeResult.length > 0) {
-          return res.status(400).json({ message: "You have already liked this post" });
-        }
-
-        // Insert like
-        const insertLikeQuery = `INSERT INTO likes (post_id, user_id, created_at) VALUES (?, ?, ?)`;
-        db.query(insertLikeQuery, [post_id, user_id, currentTime], (err, likeResult) => {
-          if (err) {
-            return res.status(500).json({ message: "Error creating like", error: err });
-          }
-
-          // Insert notification for like with delay
-          const insertNotificationQuery = `INSERT INTO notifications (title, message, user_id, profilePhoto, action_type, created_at) VALUES (?, ?, ?, ?, 'like', ?)`;
-          const notificationMessage = `${username} telah memberi like pada postingan Anda.`;
-
-          setTimeout(() => {
-            db.query(insertNotificationQuery, [username, notificationMessage, user_id, userProfilePhoto, currentTime], (err, notifResult) => {
-              if (err) {
-                return res.status(500).json({ message: "Error creating notification", error: err });
-              }
-
-              res.status(201).json({
-                message: "Like and notification created successfully",
-                likeId: likeResult.insertId,
-                notificationId: notifResult.insertId,
-              });
-            });
-          }, 10000); // 10 detik delay untuk notifikasi
+        // Tidak ada notifikasi post, hanya mengirim respons keberhasilan
+        res.status(201).json({
+          message: "Post created successfully",
+          postId: forumId
         });
       });
     });
@@ -393,6 +303,235 @@ router.post("/like", async (req, res) => {
     console.error("Unexpected Error:", error);
     res.status(500).json({ message: "Unexpected error occurred", error: error.message || "Unknown error" });
   }
+});
+
+
+// Rute POST /comment untuk menambah komentar dan notifikasi
+router.post('/comment', (req, res) => {
+  const { comment, postId, userId } = req.body;  // Mendapatkan data dari body
+  const currentTime = new Date().toISOString();  // Menggunakan format ISO untuk waktu
+
+  console.log("Received postId:", postId);  // Menambahkan log untuk memeriksa nilai postId
+
+  // 1. Dapatkan pemilik forum berdasarkan postId
+  const getForumOwnerQuery = `SELECT user_id FROM forums WHERE id = ?`;
+  db.query(getForumOwnerQuery, [postId], (err, forumResult) => {
+    if (err) {
+      console.error("Error fetching forum:", err);
+      return res.status(500).json({ message: "Error fetching forum", error: err });
+    }
+
+    console.log("Forum Result:", forumResult); // Debugging log untuk melihat hasil query
+
+    if (forumResult.length === 0) {
+      return res.status(404).json({ message: "Forum not found" });
+    }
+
+    const recipientId = forumResult[0].user_id;  // ID pemilik forum
+
+    if (!recipientId) {
+      return res.status(404).json({ message: "Recipient (forum owner) not found" });
+    }
+
+    // 2. Ambil nama dan username pemilik forum
+    const getRecipientQuery = `SELECT name, username FROM users WHERE id = ?`;
+    db.query(getRecipientQuery, [recipientId], (err, recipientResult) => {
+      if (err) {
+        console.error("Error fetching recipient data:", err);
+        return res.status(500).json({ message: "Error fetching recipient data", error: err });
+      }
+
+      if (recipientResult.length === 0) {
+        return res.status(404).json({ message: "Recipient not found" });
+      }
+
+      const recipientName = recipientResult[0].name;
+      const recipientUsername = recipientResult[0].username;  // Username pemilik forum
+
+      // 3. Ambil nama dan foto profil pengguna yang memberi komentar
+      const getUserQuery = `SELECT name, profilePhoto FROM users WHERE id = ?`;
+      db.query(getUserQuery, [userId], (err, userResult) => {
+        if (err) {
+          console.error("Error fetching user data:", err);
+          return res.status(500).json({ message: "Error fetching user data", error: err });
+        }
+
+        if (userResult.length === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const userName = userResult[0].name;
+        const userProfilePhoto = userResult[0].profilePhoto;
+
+        // 4. Insert komentar ke dalam database
+        const insertCommentQuery = `
+        INSERT INTO comments (comment, post_id, user_id, created_at) 
+        VALUES (?, ?, ?, ?)
+      `;
+      const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      
+      // Debugging log: menampilkan nilai yang dikirim ke query
+      console.log("Inserting comment with values: ", [comment, postId, userId, currentTime]);
+      
+      db.query(insertCommentQuery, [comment, postId, userId, currentTime], (err, insertResult) => {
+        if (err) {
+          console.error("Error inserting comment:", err);
+          return res.status(500).json({ message: "Error inserting comment", error: err });
+        }
+        // lanjutkan dengan logika lainnya
+      });
+      
+      
+          // 5. Buat notifikasi komentar
+          const title = `${userName} telah memberi komentar pada postingan Anda.`;
+          const message = `${userName} telah memberi komentar pada postingan Anda: "${comment}"`;
+
+          // 6. Insert notifikasi ke database
+          const notificationQuery = `
+            INSERT INTO notifications 
+            (title, message, user_id, profilePhoto, action_type, created_at, recipient_id, username, user_photo, recipient_name, recipient_username) 
+            VALUES 
+            (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?)
+          `;
+
+          // Debugging log: Menampilkan nilai yang akan dimasukkan ke dalam database
+          console.log("Inserting notification with values: ", [
+            title,
+            message,
+            userId,  // ID pemberi komentar
+            userProfilePhoto,
+            'comment',
+            recipientId,  // ID pemilik forum
+            userName,  // Username pemberi komentar
+            userProfilePhoto,
+            recipientName,  // Nama pemilik forum
+            recipientUsername  // Username pemilik forum
+          ]);
+
+          db.query(notificationQuery, [
+            title,
+            message,
+            userId,  // ID pemberi komentar
+            userProfilePhoto,
+            'comment',
+            recipientId,  // ID pemilik forum
+            userName,  // Username pemberi komentar
+            userProfilePhoto,
+            recipientName,  // Nama pemilik forum
+            recipientUsername  // Username pemilik forum
+          ], (err, insertNotificationResult) => {
+            if (err) {
+              console.error("Error inserting notification:", err);
+              return res.status(500).json({ message: "Error inserting notification", error: err });
+            }
+
+            // 7. Kirim response sukses setelah menambahkan komentar dan notifikasi
+            console.log("Comment and notification inserted successfully");
+            res.status(200).json({ message: "Comment added and notification created successfully" });
+          });
+        });
+      });
+    });
+  });
+
+// Rute POST /like untuk memberi like pada postingan
+router.post('/like', (req, res) => {
+  const { forumId, userId } = req.body; // forumId = ID forum yang di-like, userId = ID yang memberi like
+
+  // 1. Dapatkan pemilik postingan (forum) berdasarkan forumId
+  const getForumOwnerQuery = `SELECT user_id FROM forums WHERE id = ?`;
+  db.query(getForumOwnerQuery, [forumId], (err, result) => {
+    if (err) {
+      console.error("Error fetching forum:", err);
+      return res.status(500).json({ message: "Error fetching forum", error: err });
+    }
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "Forum not found" });
+    }
+
+    const recipientId = result[0].user_id; // ID pemilik forum (posting)
+
+    // 2. Ambil nama dan username pemilik forum (posting)
+    const getRecipientQuery = `SELECT name, username FROM users WHERE id = ?`;
+    db.query(getRecipientQuery, [recipientId], (err, recipientResult) => {
+      if (err) {
+        console.error("Error fetching recipient data:", err);
+        return res.status(500).json({ message: "Error fetching recipient data", error: err });
+      }
+
+      if (recipientResult.length === 0) {
+        return res.status(404).json({ message: "Recipient not found" });
+      }
+
+      const recipientName = recipientResult[0].name;
+      const recipientUsername = recipientResult[0].username; // Username pemilik postingan
+
+      // 3. Ambil nama dan foto profil pengguna yang memberi like
+      const getUserQuery = `SELECT name, profilePhoto FROM users WHERE id = ?`;
+      db.query(getUserQuery, [userId], (err, userResult) => {
+        if (err) {
+          console.error("Error fetching user data:", err);
+          return res.status(500).json({ message: "Error fetching user data", error: err });
+        }
+
+        if (userResult.length === 0) {
+          return res.status(404).json({ message: "User not found" });
+        }
+
+        const userName = userResult[0].name;
+        const userProfilePhoto = userResult[0].profilePhoto;
+
+        // 4. Buat notifikasi like
+        const title = `${userName} telah memberi like pada postingan Anda.`;  // Nama pemberi like
+        const message = `${userName} telah memberi like pada postingan Anda.`;  // Pesan notifikasi
+
+        // 5. Insert notifikasi ke database
+        const notificationQuery = `
+          INSERT INTO notifications 
+          (title, message, user_id, profilePhoto, action_type, created_at, recipient_id, username, user_photo, recipient_name, recipient_username) 
+          VALUES 
+          (?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?)
+        `;
+
+        // Debugging log: Menampilkan nilai yang akan dimasukkan ke dalam database
+        console.log("Inserting notification with values: ", [
+          title,
+          message,
+          userId,  // ID pemberi like
+          userProfilePhoto,
+          'like',
+          recipientId,  // ID pemilik postingan
+          userName,  // Username pemberi like
+          userProfilePhoto,
+          recipientName,  // Nama pemilik postingan
+          recipientUsername  // Username pemilik postingan
+        ]);
+
+        db.query(notificationQuery, [
+          title,
+          message,
+          userId,  // ID pemberi like
+          userProfilePhoto,
+          'like',
+          recipientId,  // ID pemilik postingan
+          userName,  // Username pemberi like
+          userProfilePhoto,
+          recipientName,  // Nama pemilik postingan
+          recipientUsername  // Username pemilik postingan
+        ], (err, insertResult) => {
+          if (err) {
+            console.error("Error inserting notification:", err);
+            return res.status(500).json({ message: "Error inserting notification", error: err });
+          }
+
+          // 6. Kirim response sukses setelah menambahkan like dan notifikasi
+          console.log("Notification inserted successfully");
+          res.status(200).json({ message: "Like added and notification created successfully" });
+        });
+      });
+    });
+  });
 });
 
 
@@ -474,7 +613,14 @@ router.get("/forum/:id", (req, res) => {
       return res.status(404).json({ message: "Forum not found" });
     }
 
-    res.status(200).json(result[0]);
+    // Base URL untuk gambar
+    const baseUrl = `${req.protocol}://${req.get("host")}/uploads`;
+    const forum = result[0];
+    forum.imageUrl = forum.image
+      ? `${baseUrl}/${forum.image.replace(/\s+/g, "_")}`  // Ganti spasi dengan "_"
+      : null; // Fallback jika image null
+
+    res.status(200).json(forum);
   });
 });
 
@@ -517,67 +663,44 @@ router.post("/notification", authenticateToken, (req, res) => {
   });
 });
 
-// GET: Get Notifications (Protected Route)
-router.get("/notifications", authenticateToken, (req, res) => {
+// Rute GET /notifications
+router.get('/notifications', (req, res) => {
   const query = `
     SELECT 
-      notifications.*, 
-      users.name AS username, 
-      users.photo AS profile_photo
+      notifications.id,
+      notifications.title,
+      notifications.message,
+      notifications.user_id,
+      notifications.profilePhoto,
+      notifications.action_type,
+      notifications.created_at,
+      notifications.recipient_id,
+      users.name AS user_name,  -- Nama pemberi like/komentar
+      users.username AS user_username,  -- Username pemberi like/komentar
+      users.profilePhoto AS user_photo,
+      recipient.name AS recipient_name,  -- Nama penerima (pemilik forum)
+      recipient.username AS recipient_username,  -- Username penerima
+      recipient.profilePhoto AS recipient_photo
     FROM notifications
     JOIN users ON notifications.user_id = users.id
-    ORDER BY time DESC
+    LEFT JOIN users AS recipient ON notifications.recipient_id = recipient.id
+    WHERE notifications.action_type IN ('like', 'comment')  -- Hanya ambil notifikasi 'like' dan 'comment'
+    ORDER BY notifications.created_at DESC
   `;
+
   db.query(query, (err, result) => {
-    if (err) return res.status(500).json({ message: "Error fetching notifications", error: err });
-    res.status(200).json(result);
-  });
-});
-
-
-// =================== CRUD COMMENT ===================
-// GET: Get Comments by Post ID
-router.get('/forum/comment/:id', async (req, res) => {
-    const forumId = req.params.id;
-    console.log(`Fetching comments for forum ID: ${forumId}`);
-
-    try {
-        db.query(
-            'SELECT * FROM comments WHERE post_id = ?',
-            [forumId],
-            (err, results) => {
-                if (err) {
-                    console.error('Error fetching comments:', err);
-                    return res.status(500).json({ message: 'Error fetching comments', error: err });
-                }
-                if (results.length === 0) {
-                    return res.status(404).json({ message: 'No comments found for this forum.' });
-                }
-                res.status(200).json(results);
-            }
-        );
-    } catch (error) {
-        console.error('Error fetching comments:', error);
-        res.status(500).json({ message: 'Error fetching comments', error });
-    }
-});
-
-// DELETE: Delete Comment by ID
-router.delete('/comment/:id', (req, res) => {
-  const { id } = req.params;
-
-  const query = `DELETE FROM comments WHERE id = ?`;
-  db.query(query, [id], (err, result) => {
     if (err) {
-      return res.status(500).json({ message: 'Error deleting comment', error: err });
+      console.error("Error fetching notifications:", err);
+      return res.status(500).json({ message: "Error fetching notifications", error: err });
     }
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'Comment not found' });
+
+    if (result.length === 0) {
+      return res.status(404).json({ message: "No notifications found" });
     }
-    res.status(200).json({ message: 'Comment deleted successfully' });
+
+    res.status(200).json(result);  // Mengirim hasil notifikasi
   });
 });
-
 
 // =================== CRUD LIKE ===================
 
