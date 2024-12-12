@@ -1,11 +1,14 @@
 // googleCloud.js
-const { Storage } = require('@google-cloud/storage');
+const { Storage } = require("@google-cloud/storage");
 
 // Inisialisasi Google Cloud Storage
-const storage = new Storage({
-  keyFilename: 'path-to-your-google-cloud-credentials.json', // Ganti dengan path ke file kredensial JSON Anda
-});
+const storage = new Storage();
+// ({
+//   keyFilename:
+//     "./serviceAccount.json", // Ganti dengan path ke file kredensial JSON Anda
+  
+// });
 
-const bucket = storage.bucket('api-fitur'); // Ganti dengan nama bucket Anda
+const bucket = storage.bucket("api-fitur"); // Ganti dengan nama bucket Anda
 
 module.exports = { bucket };
