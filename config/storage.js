@@ -6,9 +6,11 @@ const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, "uploads/"); // Folder tempat file disimpan
   },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + file.originalname); // Nama file dengan timestamp
-  }
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    const cleanName = file.originalname.replace(/\s+/g, "_"); // Ganti spasi dengan "_"
+    cb(null, uniqueSuffix + cleanName);
+  },
 });
 
 // Buat middleware multer
