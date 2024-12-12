@@ -1,11 +1,14 @@
 const express = require("express");
 const app = express();
+const path = require("path");
 const routes = require("./Routes/routes"); // Menghubungkan routes
 const db = require("./config/db"); // Menggunakan pool dari db.js
 
 // Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 app.use("/api", routes);
