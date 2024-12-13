@@ -22,6 +22,5 @@ In building the Cloud Computing API for the CulturLens application, we will use 
 - Node.js
 - Docker
 
-## Deployment API
-We designed the Feature API of this Cultures application using the node.js programming language.
-Link Deploy : https://fitur-api-124653119153.asia-southeast2.run.app
+## Deployment
+We use Google Cloud Platform especially Cloud Run to implement Cloud Computing deployment.
