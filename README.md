@@ -17,7 +17,6 @@ In building the Cloud Computing API for the CulturLens application, we will use 
 - Google Cloud Platform
 - Postman
 - Restful API
-- Firebase
 - Visual Studio Code
 - Node.js
 - Docker
